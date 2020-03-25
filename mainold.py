@@ -15,8 +15,8 @@ from Mismatch_net import *
 from HD_correct import *
 
 
-def run_training(sim_number, sim_time):
-    # defaultclock.dt = 50*ms
+def run_benchmark_training(sim_number, sim_time):
+    print("start running benchmark model")
     prefs.codegen.target = "numpy"
     start_scope()
 
@@ -44,14 +44,17 @@ def run_training(sim_number, sim_time):
 
     m = 5  # 60
     iter = 0
+
     # width and length of the arena x=width/ y=lenght
     # 1 square in vrep = 0.5*0.5
     x_scale = 2
     y_scale = 2
     # distance unit per neuron
     N = 200 / (N_x_axis * N_y_axis)
+
     #define the initial mismatch encounter
     last_mismatch = 0
+
     ##--------------------------------------------------------------------------------------------------------------------##
     ##--------------------Collision detection Neural Architecture--------------------------------------------##
     ##--------------------------------------------------------------------------------------------------------------------##
@@ -188,7 +191,7 @@ def run_training(sim_number, sim_time):
     sensor_val1, sensor_val2, sensor_val3, sensor_val4, sensor_val5, sensor_val6, sensor_val7, sensor_val8 = getSensorDistance(
         detectedPoint1, detectedPoint2, detectedPoint3, detectedPoint4, detectedPoint5, detectedPoint6, detectedPoint7,
         detectedPoint8)
-    # get sensor for mismatch landmark detection
+    # get sensor for mismatch landmark detection(get sensor point and distance)
     err_code, sensorMismatch = vrep.simxGetObjectHandle(clientID, "Proximity_sensor", vrep.simx_opmode_blocking)
     err_code,detectionStateMismatch,detectedPointMismatch,detectedObjectHandleMismatch,detectedSurfaceNormalVectorMismatch=vrep.simxReadProximitySensor(clientID,sensorMismatch,vrep.simx_opmode_streaming)
     mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
@@ -206,18 +209,15 @@ def run_training(sim_number, sim_time):
                            np.repeat(inv_filter(sensor_val5), N_CD), np.repeat(inv_filter(sensor_val6), N_CD),
                            np.repeat(inv_filter(sensor_val7), N_CD), np.repeat(inv_filter(sensor_val8), N_CD)])
     sensor_val_vision = np.zeros([N_vision, N_VD])
-    # print('init sensor vision val is', sensor_val_vision.shape)
     # sum of each sensor value * its gaussian distribution --> sum to find all activity for each neurons --> WTA
     All_stimuli = np.sum(sensor_val * stimuli, axis=0)
     All_stimuli_vision = np.sum(sensor_val_vision * stimuli_vision, axis=0)
 
     # find the winner
     winner = WTA(All_stimuli)
-    # print("initi winner vector is" , winner)
     for w in winner:
         Poisson_synapse.w_poi[w] = All_stimuli[w]
     winner_vision = WTA(All_stimuli_vision)
-    # print("initi winner vector is", winner_vision)
     for w in winner_vision:
         PoissonVision_synapse.w_vision_poi[w] = All_stimuli_vision[w]
 
@@ -282,10 +282,6 @@ def run_training(sim_number, sim_time):
             l_steer = 0.24
             r_steer = 0.24
             zeta = 0
-
-        ##-----------------mismatch detection -----------------##
-            ##check mismatch
-
 
         ####-------------------- Record weight------------------------####
         weight_during_run_landmark[:, iter] = w_plastic_landmark
@@ -372,32 +368,28 @@ def run_training(sim_number, sim_time):
         Reset_synapse.w_reset = np.array(gaussian_spike(N_HD, recal, 30, 0.03))
         # print("reset synapse",Reset_synapse.w_reset)
 
-        ##-----------------head direction error correction -----------------##
-
-        #if iter == 10:
+        ##----------------Active searching for landmark when encountering mismatch -----------------##
         if len(spikemon_Mismatch) > last_mismatch:
             print('encounter mismatch')
             err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
                 clientID, sensorMismatch, vrep.simx_opmode_streaming)
             mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
-            print("mismatch distance", mismatch_sensordistance)
 
             while mismatch_sensordistance  <= 0.01:
                 l_steer = 0
                 r_steer = 0.5
                 err_code = vrep.simxSetJointTargetVelocity(clientID, l_motor_handle, l_steer,vrep.simx_opmode_streaming)
                 err_code = vrep.simxSetJointTargetVelocity(clientID, r_motor_handle, r_steer,vrep.simx_opmode_streaming)
-                print("mismatch distance",mismatch_sensordistance)
                 err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
                     clientID, sensorMismatch, vrep.simx_opmode_streaming)
                 mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
+            current_error_distance =  mismatch_sensordistance
             l_steer = 0.24
             r_steer = 0.24
             err_code = vrep.simxSetJointTargetVelocity(clientID, l_motor_handle, l_steer, vrep.simx_opmode_streaming)
             err_code = vrep.simxSetJointTargetVelocity(clientID, r_motor_handle, r_steer, vrep.simx_opmode_streaming)
         last_mismatch = len(spikemon_Mismatch)
 
-        print('speed value',l_steer,r_steer)
         ##----------------- Read position -----------------##
         err_code, Position = vrep.simxGetObjectPosition(clientID, robot, -1, vrep.simx_opmode_streaming)
         # print("position value is",Position)
@@ -412,16 +404,14 @@ def run_training(sim_number, sim_time):
         recal_x_axis = nearest_neuron_x_axis(x_pos, N_x_axis, x_scale)
         recal_y_axis = nearest_neuron_y_axis(y_pos, N_y_axis, y_scale)
         recal_index = N_x_axis * recal_y_axis + recal_x_axis
-        # print("recali position",recal_x_axis,recal_y_axis )
 
         r = np.append(r, recal_index)  # is an array keeping all index that neuron fire during the run
-        # set reset weight
 
-        ### comment this line to diable using IMU
+        ##----------------- reset position neuron with IMU recalibration ---------------------##
+        '''coment this line to disable IMU'''
+        #PI_Reset_synapse.w_poi_PI = np.array(gaussian_spike(N_PI, recal_index, 20, 0.01))
 
-        PI_Reset_synapse.w_poi_PI = np.array(gaussian_spike(N_PI, recal_index, 20, 0.01))
-
-        ##----------------- Index when collision -----------------##
+        ##----------------- Recording Position Index when collision -----------------##
         if l_steer == 0 or r_steer == 0:
             collision_index = np.append(collision_index, recal_index)
 
@@ -438,11 +428,11 @@ def run_training(sim_number, sim_time):
 
         print('####-------------------- Read sensor (new round) ----------------------------####')
 
-        # slow down the controller for more stability
-        # time.sleep(4.2)
         # Start new measurement in the next time step
         detectedPoint1, detectedPoint2, detectedPoint3, detectedPoint4, detectedPoint5, detectedPoint6, detectedPoint7, detectedPoint8 = getDetectedpoint(
             sensor1, sensor2, sensor3, sensor4, sensor5, sensor6, sensor7, sensor8, clientID)
+        err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
+            clientID, sensorMismatch, vrep.simx_opmode_streaming)
         err_code, resolution, image = vrep.simxGetVisionSensorImage(clientID, camera, 1, vrep.simx_opmode_streaming)
 
         # record time step and final time
@@ -458,17 +448,13 @@ def run_training(sim_number, sim_time):
 
     print("Done")
 
-    ''' For plotting results, run plotter.py'''
-
-    # uncomment to save
-
+    # saving data
+    # setting pathway
     pathway = "/Users/jieyab/SNN/for_plotting/"
-    ##
+
 
     exp_number = str(sim_number)
-
     np.save(pathway + "r" + exp_number, r)
-    # np.save(pathway+"spike_time.csv", spike_time)
     np.save(pathway + "spikemon_CD_i" + exp_number, spikemon_CD.i)
     np.save(pathway + "spikemon_CD_t" + exp_number, spikemon_CD.t / ms)
     np.save(pathway + "spikemon_HD_i" + exp_number, spikemon_HD.i)
@@ -493,8 +479,10 @@ def run_training(sim_number, sim_time):
     np.save(pathway + "spikemon_mismatch_v" + exp_number, spikemon_Mismatch.v)
     np.save(pathway + "collision_index" + exp_number, collision_index)
     np.save(pathway + "collision_index_during_run" + exp_number, collision_index_during_run)
+
     np.save(pathway + "compass_angle" + exp_number, compass_angle)
     np.save(pathway + "all_time" + exp_number, all_time)
+
     np.save(pathway + "spikemon_estimatedlandmark_i" + exp_number, spikemon_estimatedlandmark.i)
     np.save(pathway + "spikemon_estimatedlandmark_t" + exp_number, spikemon_estimatedlandmark.t / ms)
     np.save(pathway + "spikemon_nonestimatedlandmark_i" + exp_number, spikemon_nonestimatedlandmark.i)
@@ -504,6 +492,5 @@ def run_training(sim_number, sim_time):
     np.save(pathway + "spikemon_notred_i" + exp_number, spikemon_notred.i)
     np.save(pathway + "spikemon_notred_t" + exp_number, spikemon_notred.t / ms)
     np.save(pathway + "step_time" + exp_number, time_step_list)
-    # np.save(pathway+"weight_matrix.npy",weight_matrix)
 
     return clientID

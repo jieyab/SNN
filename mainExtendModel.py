@@ -17,7 +17,7 @@ from speed_pool_synapses import *
 
 
 def run_extendedmodel_training(sim_number, sim_time):
-    # defaultclock.dt = 50*ms
+    print("start running extended model")
     prefs.codegen.target = "numpy"
     start_scope()
 
@@ -51,6 +51,8 @@ def run_extendedmodel_training(sim_number, sim_time):
     y_scale = 2
     # distance unit per neuron
     N = 200 / (N_x_axis * N_y_axis)
+    last_mismatch = 0
+
 
     ##--------------------------------------------------------------------------------------------------------------------##
     ##--------------------Collision detection Neural Architecture--------------------------------------------##
@@ -64,10 +66,8 @@ def run_extendedmodel_training(sim_number, sim_time):
     # gaussian input for 8 collison sensors
     stimuli = np.array([gaussian_spike(N_CD, j * N_CD / N_sensor, 10, 0.2) for j in range(N_sensor)])
 
-    # print("init stimuli", stimuli)
     # gaussion distribution for 2 vision input(wall or landmark)
     stimuli_vision = np.array([gaussian_spike(N_VD, j * N_VD / N_vision, 10, 0.2) for j in range(N_vision)])
-    # print("stimu_vision gaussian",stimuli_vision)
     ##--------------------------------------------------------------------------------------------------------------------##
     ##--------------------Head Direction and position Neural Architecture----------------------------------------------------------##
     ##--------------------------------------------------------------------------------------------------------------------##
@@ -215,6 +215,11 @@ def run_extendedmodel_training(sim_number, sim_time):
     sensor_val1, sensor_val2, sensor_val3, sensor_val4, sensor_val5, sensor_val6, sensor_val7, sensor_val8 = getSensorDistance(
         detectedPoint1, detectedPoint2, detectedPoint3, detectedPoint4, detectedPoint5, detectedPoint6, detectedPoint7,
         detectedPoint8)
+    # get sensor for mismatch landmark detection
+    err_code, sensorMismatch = vrep.simxGetObjectHandle(clientID, "Proximity_sensor", vrep.simx_opmode_blocking)
+    err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
+        clientID, sensorMismatch, vrep.simx_opmode_streaming)
+    mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
     # get vision sensor
     err_code, camera = vrep.simxGetObjectHandle(clientID, "Vision_sensor", vrep.simx_opmode_blocking)
     err_code, resolution, image = vrep.simxGetVisionSensorImage(clientID, camera, 1, vrep.simx_opmode_streaming)
@@ -228,21 +233,16 @@ def run_extendedmodel_training(sim_number, sim_time):
                            np.repeat(inv_filter(sensor_val5), N_CD), np.repeat(inv_filter(sensor_val6), N_CD),
                            np.repeat(inv_filter(sensor_val7), N_CD), np.repeat(inv_filter(sensor_val8), N_CD)])
 
-    # print('initi sensor_val shape is',sensor_val.shape)
     sensor_val_vision = np.zeros([N_vision, N_VD])
-    # print('init sensor vision val is', sensor_val_vision.shape)
     # sum of each sensor value * its gaussian distribution --> sum to find all activity for each neurons --> WTA
     All_stimuli = np.sum(sensor_val * stimuli, axis=0)
-    # print('initi all stimuli shape is', All_stimuli.shape)
     All_stimuli_vision = np.sum(sensor_val_vision * stimuli_vision, axis=0)
 
     # find the winner
     winner = WTA(All_stimuli)
-    # print("initi winner vector is" , winner)
     for w in winner:
         Poisson_synapse.w_poi[w] = All_stimuli[w]
     winner_vision = WTA(All_stimuli_vision)
-    # print("initi winner vector is", winner_vision)
     for w in winner_vision:
         PoissonVision_synapse.w_vision_poi[w] = All_stimuli_vision[w]
 
@@ -279,19 +279,14 @@ def run_extendedmodel_training(sim_number, sim_time):
 
     # start simulation
     while (time.time() - t_int) < sim_time:
-
         t1 = time.time() - t_int
         # record sensor at each time step
         sensor_val1, sensor_val2, sensor_val3, sensor_val4, sensor_val5, sensor_val6, sensor_val7, sensor_val8 = getSensorDistance(
             detectedPoint1, detectedPoint2, detectedPoint3, detectedPoint4, detectedPoint5, detectedPoint6,
             detectedPoint7, detectedPoint8)
-        # print("sensor values",sensor_val1,sensor_val2,sensor_val3,sensor_val4,sensor_val5,sensor_val6,sensor_val7,sensor_val8)
         all_sensor = np.array([sensor_val1, sensor_val2, sensor_val3, sensor_val4, sensor_val5])
-        # print("all sensor is ", all_sensor)
         all_sensor[all_sensor < 4.1e-20] = np.infty
-        # print("all snesor", all_sensor)
         activated_sensor = np.argmin(all_sensor)
-        # print("activated sensor index is",activated_sensor)
 
         # obtain vision sensor values
         pixelimage = set(image)
@@ -319,18 +314,6 @@ def run_extendedmodel_training(sim_number, sim_time):
             zeta = 0
 
         ####-------------------- Record weight------------------------####
-
-        '''
-        if t1 <= weight_record_time and weight_record_time < t1+5:
-            print('recording weights')
-            #weight_during_run[:,m_ind] = w_plastic
-            weight_during_run_landmark[:, m_ind] = w_plastic_landmark
-            weight_during_run_wall[:, m_ind] = w_plastic_wall
-            m_ind += 1
-            weight_record_time += m
-            collision_index_during_run.append(collision_index)
-        '''
-
         weight_during_run_landmark[:, iter] = w_plastic_landmark
         weight_during_run_wall[:, iter] = w_plastic_wall
         collision_index_during_run.append(collision_index)
@@ -341,10 +324,7 @@ def run_extendedmodel_training(sim_number, sim_time):
                                np.repeat(inv_filter(sensor_val3), N_CD), np.repeat(inv_filter(sensor_val4), N_CD),
                                np.repeat(inv_filter(sensor_val5), N_CD), np.repeat(inv_filter(sensor_val6), N_CD),
                                np.repeat(inv_filter(sensor_val7), N_CD), np.repeat(inv_filter(sensor_val8), N_CD)])
-
-        # print("sensor_val",sensor_val)
         sensor_val_vision = generate_vision_val(pixelimage, N_VD)
-        # print("sensor vision",sensor_val_vision)
 
         # reset weight to 0 again
         Poisson_synapse.w_poi = 0
@@ -353,29 +333,19 @@ def run_extendedmodel_training(sim_number, sim_time):
         err_code = vrep.simxSetJointTargetVelocity(clientID, l_motor_handle, l_steer, vrep.simx_opmode_streaming)
         err_code = vrep.simxSetJointTargetVelocity(clientID, r_motor_handle, r_steer, vrep.simx_opmode_streaming)
 
-        # print("current sensor_val is ", sensor_val)
-        # print("current sensor vision val",sensor_val_vision)
-        # print("currentpixel",pixelimage)
-
         # All stimuli and WTA
         All_stimuli = (np.sum(sensor_val * stimuli, axis=0))
 
-        # print("current all stimuli is", All_stimuli)
+        # obtain winner for collision sensors
         winner = WTA(All_stimuli)
-        # print('all stimuli ', All_stimuli)
         for w in winner:
             Poisson_synapse.w_poi[w] = All_stimuli[w]
-        # print("possion synapse for collision neurons", [i for i in Poisson_synapse.w_poi if i > 0])
-        # print("pixel image",set(image))
-        # print("current winner is",winner)
-
         All_stimuli_vision = np.sum(sensor_val_vision * stimuli_vision, axis=0)
-        # print("current all stimuli vision",All_stimuli_vision)
+
+        # obtain winner for visions
         winner_vision = WTA(All_stimuli_vision)
-        # print("current winner vision index is",winner_vision)
         for w in winner_vision:
             PoissonVision_synapse.w_vision_poi[w] = All_stimuli_vision[w] / 10
-        # print("vision poisson synpase weight index", PoissonVision_synapse.w_vision_poi)
 
         # --------mismatching detecting---------##
         PI_Neurons_est_synapse.w_piest = landmark_PI_plastic.w_fusi_landmark
@@ -425,24 +395,44 @@ def run_extendedmodel_training(sim_number, sim_time):
         err_code, Angles = vrep.simxGetObjectOrientation(clientID, robot, -1, vrep.simx_opmode_streaming)
 
         heading_dir = getHeadingdirection(Angles)
-        # print("IMU head direction is", heading_dir, "angle from IMU is", Angles)
         compass_angle = np.append(compass_angle, heading_dir)
 
         # recalibrate head direction to nearest neuron
         recal = nearest_neuron_head(heading_dir, N_HD)
-        # print("recallllllll is",recal)
         #    IMU_poi_synapses.w_poi_imu = np.array(gaussian_spike(N_HD,recal,30,0.03))
 
         ## connecting to head direction error network
 
         # set reset by compass weight upon angle atm
         Reset_synapse.w_reset = np.array(gaussian_spike(N_HD, recal, 30, 0.03))
-        # print("reset synapse",Reset_synapse.w_reset)
 
         ##-----------------head direction error correction -----------------##
         IMU_poi_synapses.w_poi_imu = np.array(gaussian_spike(N_HD, recal, 30, 0.03))
 
-        ##-----------------mismatch detection -----------------##
+        ##----------------Active searching for landmark when encountering mismatch -----------------##
+        if len(spikemon_Mismatch) > last_mismatch:
+            print('encounter mismatch')
+            err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
+                clientID, sensorMismatch, vrep.simx_opmode_streaming)
+            mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
+            # rotating to detect the orientation of
+            while mismatch_sensordistance <= 0.01:
+                l_steer = 0
+                r_steer = 0.5
+                err_code = vrep.simxSetJointTargetVelocity(clientID, l_motor_handle, l_steer,
+                                                           vrep.simx_opmode_streaming)
+                err_code = vrep.simxSetJointTargetVelocity(clientID, r_motor_handle, r_steer,
+                                                           vrep.simx_opmode_streaming)
+                print("mismatch distance", mismatch_sensordistance)
+                err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
+                    clientID, sensorMismatch, vrep.simx_opmode_streaming)
+                mismatch_sensordistance = np.linalg.norm(detectedPointMismatch)
+            current_error_distance = mismatch_sensordistance
+            l_steer = 0.24
+            r_steer = 0.24
+            err_code = vrep.simxSetJointTargetVelocity(clientID, l_motor_handle, l_steer, vrep.simx_opmode_streaming)
+            err_code = vrep.simxSetJointTargetVelocity(clientID, r_motor_handle, r_steer, vrep.simx_opmode_streaming)
+        last_mismatch = len(spikemon_Mismatch)
 
         ##----------------- Read position -----------------##
         err_code, Position = vrep.simxGetObjectPosition(clientID, robot, -1, vrep.simx_opmode_streaming)
@@ -477,22 +467,10 @@ def run_extendedmodel_training(sim_number, sim_time):
         PINet.run(15 * ms)
 
         print("current plas landmark synapese index", np.where(w_plastic_landmark >= 0.5))
-        # print("current landmark", [i for i in w_plastic_landmark if i > 0.3])
-        # print("current est landmark value", [i for i in w_plastic_estlandmark if i >= 0.5])
-        # print('wall synpases values',[i for i in w_plastic_wall if i > 0])
         print('wall synpases values index bigger', np.where(w_plastic_wall >= 0.5))
         print('count mismatch',len(spikemon_Mismatch))
         print('count landmark', len(spikemon_landmark))
-        # print('wall synpases values index bigger 0.7', np.where(w_plastic_wall > 0.7))
 
-        # print("fusi values ",[i for i in estLandmark_PI_plastic.p if i > 0])
-        # print("fusi valuessss ",[i for i in estLandmark_PI_plastic.w_fusi_estimatedlandmark if i > 0])
-
-        # print("wall spike", list(spikemon_wall.t),"landmark spikes",list(spikemon_landmark.t))
-        # print("last mismatch voltage spike time is ", list(spikemon_Mismatch.t))
-        #   print("HD pos error spike ", spikemon_positiveHD_error.i[:])
-        #  print('HD neg error spike',spikemon_negativeHD_error.i[:])
-        #   print("HD pos spike train", spikemon_positiveHD_error.num_spikes)
 
         # print(defaultclock.t)
         print('####-------------------- Read sensor (new round) ----------------------------####')
@@ -502,13 +480,9 @@ def run_extendedmodel_training(sim_number, sim_time):
         # Start new measurement in the next time step
         detectedPoint1, detectedPoint2, detectedPoint3, detectedPoint4, detectedPoint5, detectedPoint6, detectedPoint7, detectedPoint8 = getDetectedpoint(
             sensor1, sensor2, sensor3, sensor4, sensor5, sensor6, sensor7, sensor8, clientID)
+        err_code, detectionStateMismatch, detectedPointMismatch, detectedObjectHandleMismatch, detectedSurfaceNormalVectorMismatch = vrep.simxReadProximitySensor(
+            clientID, sensorMismatch, vrep.simx_opmode_streaming)
         err_code, resolution, image = vrep.simxGetVisionSensorImage(clientID, camera, 1, vrep.simx_opmode_streaming)
-        # err_code, resolution, image2 = vrep.simxGetVisionSensorImage(clientID, camera2, 1, vrep.simx_opmode_streaming)
-
-        # print when near obstacle
-        # if collision(sensor_val1, sensor_val2, sensor_val3, sensor_val4, sensor_val5, sensor_val6, sensor_val7,
-        #           sensor_val8):
-        # print("near collision")
 
         # record time step and final time
         t2 = time.time() - t_int
